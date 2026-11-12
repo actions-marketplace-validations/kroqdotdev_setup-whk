@@ -1,0 +1,3 @@
+# The install script runs under bash on every runner, Windows included,
+# where a checkout would otherwise turn its line endings into CRLF.
+* text=auto eol=lf

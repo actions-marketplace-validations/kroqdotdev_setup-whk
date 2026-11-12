@@ -1,0 +1,169 @@
+name: Test
+
+# Runs the action from this checkout on every runner it supports. The weekly
+# run catches a whk release the action cannot install.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck
+        run: shellcheck install.sh
+
+  install:
+    name: Install on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          # The oldest glibc the Linux builds run on.
+          - ubuntu-22.04
+          - ubuntu-24.04-arm
+          # Apple silicon.
+          - macos-latest
+          - macos-15-intel
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install whk
+        id: whk
+        uses: ./
+
+      - name: Run whk from PATH
+        run: whk --version
+
+      - name: Check the outputs
+        shell: bash
+        env:
+          INSTALLED_VERSION: ${{ steps.whk.outputs.version }}
+          INSTALLED_PATH: ${{ steps.whk.outputs.path }}
+        run: |
+          test "$(whk --version)" = "whk $INSTALLED_VERSION"
+          test "$("$INSTALLED_PATH" --version)" = "whk $INSTALLED_VERSION"
+          # No key was given, so none is set for later steps.
+          test -z "${WHK_API_KEY:-}"
+          test -z "${WHK_AUTH:-}"
+
+  pinned-version:
+    name: Install version ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["1.9.0", "v1.9.0"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install whk
+        id: whk
+        uses: ./
+        with:
+          version: ${{ matrix.version }}
+
+      - name: Check the version
+        env:
+          INSTALLED_VERSION: ${{ steps.whk.outputs.version }}
+        run: |
+          test "$INSTALLED_VERSION" = "1.9.0"
+          test "$(whk --version)" = "whk 1.9.0"
+
+  api-key:
+    name: Export the API key on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      # Not a key: whk is never asked to use it. Real keys come from a secret.
+      - name: Install whk with a key
+        uses: ./
+        with:
+          api-key: not-a-real-key
+
+      - name: Check what later steps see
+        shell: bash
+        run: |
+          test "$WHK_API_KEY" = "not-a-real-key"
+          test "$WHK_AUTH" = "key"
+          # whk says where its login comes from without calling the API,
+          # and never prints the key itself.
+          whk auth status --json | tee status.json
+          grep -q '"via":"api_key_env"' status.json
+          if grep -q "not-a-real-key" status.json; then
+            echo "whk printed the key"
+            exit 1
+          fi
+
+  refusals:
+    name: Refuse what cannot be installed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: A version that was never released
+        id: unreleased
+        continue-on-error: true
+        uses: ./
+        with:
+          version: 0.0.0
+
+      - name: Something that is not a version
+        id: not-a-version
+        continue-on-error: true
+        uses: ./
+        with:
+          version: "newest; echo injected"
+
+      - name: Both must have failed
+        env:
+          UNRELEASED: ${{ steps.unreleased.outcome }}
+          NOT_A_VERSION: ${{ steps.not-a-version.outcome }}
+        run: |
+          test "$UNRELEASED" = "failure"
+          test "$NOT_A_VERSION" = "failure"
+          if command -v whk; then
+            echo "whk is on PATH after a refused install"
+            exit 1
+          fi
+
+  windows-arm64:
+    name: Say so on Windows ARM64
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install whk
+        id: whk
+        continue-on-error: true
+        uses: ./
+
+      # There is no Windows ARM64 build of whk. When one is released, add it
+      # to install.sh and move this runner into the install matrix.
+      - name: It must have failed
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.whk.outcome }}
+        run: test "$OUTCOME" = "failure"

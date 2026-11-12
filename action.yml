@@ -1,0 +1,44 @@
+name: Setup whk
+description: Install whk, the webhooks.cc CLI, to capture, inspect and forward webhooks and test emails in CI
+author: webhooks.cc
+
+branding:
+  icon: anchor
+  color: green
+
+inputs:
+  version:
+    description: >-
+      The whk version to install, such as 1.10.0 or v1.10.0.
+      "latest" installs the newest release.
+    required: false
+    default: latest
+  api-key:
+    description: >-
+      A webhooks.cc API key, passed from a secret. It is exported to the steps
+      that follow as WHK_API_KEY, together with WHK_AUTH=key, so whk and the
+      webhooks.cc SDKs act as that account. It is masked in the log and never printed.
+    required: false
+    default: ""
+
+outputs:
+  version:
+    description: The installed version, without the leading "v" (1.10.0).
+    value: ${{ steps.install.outputs.version }}
+  path:
+    description: The full path of the installed whk binary.
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install whk
+      id: install
+      shell: bash
+      # Inputs reach the script through the environment, never through the
+      # script text, so a value can neither be run as shell nor show up in
+      # the command the log prints.
+      env:
+        SETUP_WHK_VERSION: ${{ inputs.version }}
+        SETUP_WHK_API_KEY: ${{ inputs.api-key }}
+      run: bash "$GITHUB_ACTION_PATH/install.sh"
